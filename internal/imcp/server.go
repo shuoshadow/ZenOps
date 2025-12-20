@@ -335,7 +335,10 @@ func (s *MCPServer) Start() error {
 // StartSSE 启动 MCP 服务器 (SSE 模式)
 func (s *MCPServer) StartSSE() error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.config.Server.MCP.Port)
-	logx.Info("🧰 Starting MCP Server In SSE Mode, Listening On %s", addr)
+
+	// 记录工具数量
+	tools := s.mcpServer.ListTools()
+	logx.Info("🧰 Starting MCP Server In SSE Mode, Listening On %s (Total tools: %d)", addr, len(tools))
 
 	// 创建 SSE 服务器
 	s.sseServer = server.NewSSEServer(
@@ -420,7 +423,24 @@ func (s *MCPServer) CallTool(ctx context.Context, toolName string, arguments map
 		return s.handleListJenkinsBuilds(ctx, request)
 
 	default:
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported tool: %s", toolName)), nil
+		// 尝试从底层 MCP Server 调用工具(用于外部 MCP 工具,如 CNB)
+		logx.Debug("Tool not in built-in list, trying to call from registered handlers: %s", toolName)
+
+		// 获取工具定义和处理器
+		serverTool := s.mcpServer.GetTool(toolName)
+		if serverTool == nil {
+			logx.Error("Tool not found in MCP server: %s", toolName)
+			return mcp.NewToolResultError(fmt.Sprintf("unsupported tool: %s", toolName)), nil
+		}
+
+		// 调用工具处理器
+		result, err := serverTool.Handler(ctx, request)
+		if err != nil {
+			logx.Error("Failed to call tool handler: %s, error: %v", toolName, err)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to call tool: %v", err)), nil
+		}
+
+		return result, nil
 	}
 }
 
